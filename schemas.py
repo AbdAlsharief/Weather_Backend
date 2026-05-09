@@ -1,6 +1,14 @@
 from pydantic import BaseModel, field_validator
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+
+class ForecastDay(BaseModel):
+    day: str
+    date: str
+    high: float
+    low: float
+    description: str
+
 
 class WeatherBase(BaseModel):
     user_input_location: str
@@ -11,6 +19,11 @@ class WeatherBase(BaseModel):
     end_date: Optional[datetime] = None
     temp: float
     condition: str
+    humidity: Optional[int] = None
+    wind_speed: Optional[float] = None
+    uv_index: Optional[float] = None
+    pressure: Optional[int] = None
+    visibility: Optional[int] = None
 
 class WeatherCreate(BaseModel):
     location: str
@@ -31,6 +44,7 @@ class WeatherUpdate(BaseModel):
 class WeatherResponse(WeatherBase):
     id: int
     created_at: datetime
+    forecast: Optional[List[ForecastDay]] = None
 
     class Config:
         from_attributes = True

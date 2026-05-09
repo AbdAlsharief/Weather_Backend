@@ -2,11 +2,16 @@ import os
 import httpx
 from fastapi import HTTPException
 from collections import Counter
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "your_api_key_here")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
+if not OPENWEATHER_API_KEY:
+    raise ValueError("OPENWEATHER_API_KEY is not set in the environment or .env file")
+    
 BASE_URL_GEO = "http://api.openweathermap.org/geo/1.0"
 BASE_URL_WEATHER = "http://api.openweathermap.org/data/2.5"
 
@@ -16,6 +21,29 @@ async def resolve_location(query: str) -> dict:
     Handles City names, Zip codes, or Landmarks.
     """
     async with httpx.AsyncClient() as client:
+        # Check if the query is coordinates (lat,lon)
+        if "," in query:
+            parts = [p.strip() for p in query.split(",")]
+            if len(parts) == 2:
+                try:
+                    lat = float(parts[0])
+                    lon = float(parts[1])
+                    # Get the name using reverse geocoding
+                    reverse_url = f"{BASE_URL_GEO}/reverse?lat={lat}&lon={lon}&limit=1&appid={OPENWEATHER_API_KEY}"
+                    rev_resp = await client.get(reverse_url)
+                    display_name = query
+                    if rev_resp.status_code == 200 and rev_resp.json():
+                        data = rev_resp.json()[0]
+                        display_name = f"{data.get('name')}, {data.get('country')}"
+                    
+                    return {
+                        "lat": lat,
+                        "lon": lon,
+                        "display_name": display_name
+                    }
+                except ValueError:
+                    pass # Not coordinates, proceed to other checks
+
         # First, check if the query looks like a zip code (e.g., digits or format 'zip,country')
         # We will attempt the zip endpoint if it contains numbers and no spaces, otherwise direct endpoint
         is_zip = any(char.isdigit() for char in query) and "," in query
@@ -84,40 +112,39 @@ async def get_weather_data(lat: float, lon: float) -> dict:
         conditions = [item["weather"][0]["main"] for item in forecast_list if item.get("weather")]
         primary_condition = Counter(conditions).most_common(1)[0][0] if conditions else "Unknown"
 
+        # Process 5-day forecast (simplified to daily high/low)
+        daily_data = {}
+        for item in forecast_list:
+            date_str = item.get("dt_txt").split(" ")[0]
+            if date_str not in daily_data:
+                daily_data[date_str] = {"temps": [], "conditions": []}
+            daily_data[date_str]["temps"].append(item["main"]["temp"])
+            daily_data[date_str]["conditions"].append(item["weather"][0]["main"])
+
+        final_forecast = []
+        for date_str in sorted(daily_data.keys())[:5]:
+            day_data = daily_data[date_str]
+            high = max(day_data["temps"])
+            low = min(day_data["temps"])
+            primary = Counter(day_data["conditions"]).most_common(1)[0][0]
+            day_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a").upper()
+            
+            final_forecast.append({
+                "day": day_name,
+                "date": date_str,
+                "high": round(high, 1),
+                "low": round(low, 1),
+                "description": primary
+            })
+
         return {
             "average_temp": round(average_temp, 2),
-            "primary_condition": primary_condition
+            "primary_condition": primary_condition,
+            "humidity": forecast_list[0]["main"]["humidity"],
+            "wind_speed": forecast_list[0]["wind"]["speed"],
+            "pressure": forecast_list[0]["main"]["pressure"],
+            "visibility": forecast_list[0]["visibility"],
+            "forecast": final_forecast
         }
 
-def generate_ai_insight(temp: float, condition: str) -> str:
-    """
-    Generate a travel tip or precaution based on temperature and weather condition.
-    """
-    insights = []
 
-    # Temperature-based insights
-    if temp > 30:
-        insights.append("Extreme heat—stay hydrated and avoid midday sun.")
-    elif temp > 25:
-        insights.append("Warm weather—perfect for outdoor activities, but don't forget sunscreen.")
-    elif temp < 0:
-        insights.append("Freezing temperatures—dress in heavy layers to prevent frostbite.")
-    elif temp < 10:
-        insights.append("Cold weather—make sure to bring a warm coat.")
-    else:
-        insights.append("Mild temperatures—comfortable for most activities.")
-
-    # Condition-based insights
-    condition_lower = condition.lower()
-    if "rain" in condition_lower or "drizzle" in condition_lower:
-        insights.append("Expect rain; carrying an umbrella and wearing waterproof shoes is highly recommended.")
-    elif "snow" in condition_lower:
-        insights.append("Snowy conditions—drive carefully and wear winter boots.")
-    elif "thunderstorm" in condition_lower:
-        insights.append("Thunderstorms expected—seek shelter indoors and avoid open areas.")
-    elif "clear" in condition_lower:
-        insights.append("Clear skies ahead—great visibility and weather for sightseeing.")
-    elif "cloud" in condition_lower:
-        insights.append("Cloudy conditions—good for photos without harsh shadows, though a light jacket might help.")
-
-    return " ".join(insights)

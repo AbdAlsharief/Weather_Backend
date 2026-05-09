@@ -60,9 +60,9 @@ async def create_weather_report(
     weather_data = await services.get_weather_data(lat, lon)
     temp = weather_data["average_temp"]
     condition = weather_data["primary_condition"]
-    
-    # 3. Generate AI Insight
-    ai_insight = services.generate_ai_insight(temp, condition)
+    forecast = weather_data["forecast"]
+    humidity = weather_data["humidity"]
+    wind_speed = weather_data["wind_speed"]
     
     # 4. Save to Database
     db_report = models.WeatherReport(
@@ -73,7 +73,11 @@ async def create_weather_report(
         start_date=request.start_date,
         end_date=request.end_date,
         temp=temp,
-        condition=condition
+        condition=condition,
+        humidity=humidity,
+        wind_speed=wind_speed,
+        pressure=weather_data.get("pressure"),
+        visibility=weather_data.get("visibility")
     )
     db.add(db_report)
     db.commit()
@@ -83,12 +87,16 @@ async def create_weather_report(
     encoded_query = urllib.parse.quote(f"{resolved_location} travel guide")
     discovery = {
         "google_maps_url": f"https://www.google.com/maps/search/?api=1&query={lat},{lon}",
-        "youtube_travel_url": f"https://www.youtube.com/results?search_query={encoded_query}",
-        "ai_insight": ai_insight
+        "youtube_travel_url": f"https://www.youtube.com/results?search_query={encoded_query}"
     }
     
+    report_response = schemas.WeatherResponse.model_validate(db_report)
+    report_response.forecast = forecast
+    report_response.pressure = weather_data.get("pressure")
+    report_response.visibility = weather_data.get("visibility")
+
     return {
-        "report": schemas.WeatherResponse.model_validate(db_report),
+        "report": report_response,
         "discovery": discovery
     }
 
@@ -167,6 +175,10 @@ async def export_data(format: str, db: Session = Depends(get_db)):
                 "end_date": r.end_date.isoformat() if r.end_date else None,
                 "temp": r.temp,
                 "condition": r.condition,
+                "humidity": r.humidity,
+                "wind_speed": r.wind_speed,
+                "pressure": r.pressure,
+                "visibility": r.visibility,
                 "created_at": r.created_at.isoformat()
             }
             for r in records
@@ -191,7 +203,7 @@ async def export_data(format: str, db: Session = Depends(get_db)):
                 writer.writerow([
                     "id", "user_input_location", "resolved_location", 
                     "latitude", "longitude", "start_date", "end_date", 
-                    "temp", "condition", "created_at"
+                    "temp", "condition", "humidity", "wind_speed", "pressure", "visibility", "created_at"
                 ])
                 for r in records:
                     writer.writerow([
@@ -199,7 +211,7 @@ async def export_data(format: str, db: Session = Depends(get_db)):
                         r.latitude, r.longitude, 
                         r.start_date.isoformat() if r.start_date else "", 
                         r.end_date.isoformat() if r.end_date else "", 
-                        r.temp, r.condition, r.created_at.isoformat()
+                        r.temp, r.condition, r.humidity, r.wind_speed, r.pressure, r.visibility, r.created_at.isoformat()
                     ])
         
         return FileResponse(
